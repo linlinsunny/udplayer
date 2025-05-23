@@ -6,11 +6,11 @@
 - 调用 mpv 播放视频
 - 跨平台，窗口置顶
 需要自行安装 mpv
-macos
+#### macos
 ```bash
 brew install mpv
 ```
-windows 打开 powershell
+#### windows 打开 powershell
 ```bash
 Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
 choco install mpvio
