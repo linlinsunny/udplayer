@@ -1,7 +1,5 @@
 // 只用 mpv 单窗口方案，Rust 仅做 UDP 控制
-use std::env;
 use std::net::UdpSocket;
-use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
 
@@ -19,12 +17,6 @@ const MPV_SOCKET: &str = "/tmp/mpvsocket";
 const MPV_SOCKET: &str = r"\\.\pipe\mpvsocket";
 
 fn main() {
-    // 自动切换到可执行文件所在目录，兼容双击启动
-    if let Ok(exe_path) = env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            let _ = env::set_current_dir(exe_dir);
-        }
-    }
     // 启动 mpv 全屏显示图片，开启 IPC 控制
     let ipc_arg = format!("--input-ipc-server={}", MPV_SOCKET);
     let _mpv = Command::new("mpv")
@@ -35,6 +27,8 @@ fn main() {
         .arg("--no-border")
         .arg(ipc_arg)
         .arg("--image-display-duration=inf")
+        .arg("--idle")
+        .arg("--force-window=immediate")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -44,7 +38,7 @@ fn main() {
     thread::spawn(move || {
         let socket = UdpSocket::bind(("0.0.0.0", UDP_PORT)).expect("UDP 绑定失败");
         let mut buf = [0u8; 1024];
-        let mut current_file = BG_IMAGE.to_string();
+        let mut _current_file = BG_IMAGE.to_string();
         loop {
             if let Ok((len, _)) = socket.recv_from(&mut buf) {
                 let cmd = String::from_utf8_lossy(&buf[..len]).trim().to_uppercase();
@@ -52,7 +46,19 @@ fn main() {
                     "V1" | "V2" | "V3" => {
                         if let Some((_, file)) = VIDEO_FILES.iter().find(|(k, _)| *k == cmd) {
                             send_mpv_command(&format!("loadfile {} replace", file));
-                            current_file = file.to_string();
+                            _current_file = file.to_string();
+                            // 启动一个线程等待视频自然结束后切回图片
+                            let file_clone = file.to_string();
+                            let bg_clone = BG_IMAGE.to_string();
+                            thread::spawn(move || {
+                                // 等待视频时长后切回图片
+                                if let Ok(_meta) = std::fs::metadata(&file_clone) {
+                                    if let Ok(duration) = get_video_duration(&file_clone) {
+                                        std::thread::sleep(std::time::Duration::from_secs_f64(duration));
+                                        send_mpv_command(&format!("loadfile {} replace", bg_clone));
+                                    }
+                                }
+                            });
                         }
                     }
                     "PLAY" => {
@@ -63,7 +69,7 @@ fn main() {
                     }
                     "STOP" => {
                         send_mpv_command(&format!("loadfile {} replace", BG_IMAGE));
-                        current_file = BG_IMAGE.to_string();
+                        _current_file = BG_IMAGE.to_string();
                     }
                     _ => {}
                 }
@@ -93,4 +99,21 @@ fn send_mpv_command(cmd: &str) {
         let json = format!("{{\"command\":[{}]}}\n", cmd.split_whitespace().map(|s| format!("\"{}\"", s)).collect::<Vec<_>>().join(","));
         let _ = stream.write_all(json.as_bytes());
     }
+}
+
+// 获取视频时长（秒），需要 ffprobe 支持
+fn get_video_duration(file: &str) -> Result<f64, ()> {
+    let output = std::process::Command::new("ffprobe")
+        .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file])
+        .output();
+    if let Ok(output) = output {
+        if output.status.success() {
+            if let Ok(s) = String::from_utf8(output.stdout) {
+                if let Ok(dur) = s.trim().parse::<f64>() {
+                    return Ok(dur);
+                }
+            }
+        }
+    }
+    Err(())
 }
